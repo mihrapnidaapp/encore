@@ -106,18 +106,7 @@ enum MediaImporter {
         for u in urls where u.startAccessingSecurityScopedResource() { scoped.append(u) }
         defer { for u in scoped { u.stopAccessingSecurityScopedResource() } }
 
-        var files: [URL] = []
-        let fm = FileManager.default
-        for u in urls {
-            var isDir: ObjCBool = false
-            if fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue {
-                if let e = fm.enumerator(at: u, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
-                    for case let f as URL in e { files.append(f) }
-                }
-            } else {
-                files.append(u)
-            }
-        }
+        let files = expand(urls)
         let images = files.filter { imageExts.contains($0.pathExtension.lowercased()) }
         let media = files.filter { kind(for: $0) != nil }
 
@@ -127,6 +116,23 @@ enum MediaImporter {
             do { out.append(try await importOne(src, images: images, move: move)) } catch { failed += 1 }
         }
         return (out, failed)
+    }
+
+    /// Lists the files inside any folders (synchronous: FileManager's enumerator can't be iterated in async code).
+    private static func expand(_ urls: [URL]) -> [URL] {
+        var files: [URL] = []
+        let fm = FileManager.default
+        for u in urls {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue {
+                if let e = fm.enumerator(at: u, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+                    while let f = e.nextObject() as? URL { files.append(f) }
+                }
+            } else {
+                files.append(u)
+            }
+        }
+        return files
     }
 
     static func importOne(_ src: URL, images: [URL], move: Bool) async throws -> Track {
