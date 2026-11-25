@@ -65,10 +65,6 @@ struct YouTubeView: View {
                 }
             }
 
-            if let info {
-                Section { infoCard(info) }
-            }
-
             if !downloads.jobs.isEmpty {
                 Section {
                     ForEach(downloads.jobs) { job in
@@ -90,6 +86,10 @@ struct YouTubeView: View {
                     Text("Keep the app open while downloading. Files are saved in Files › On My iPhone › Encore › Media.")
                 }
             }
+
+            if let info {
+                Section { infoCard(info) }
+            }
         }
         .navigationTitle("YouTube")
         .sheet(isPresented: $showBrowser) {
@@ -110,8 +110,9 @@ struct YouTubeView: View {
         fetch()
     }
 
+    /// Each control is its own List row: several buttons in one row make SwiftUI swallow or merge the taps.
     @ViewBuilder private func infoCard(_ info: YTInfo) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Color.clear
                 .aspectRatio(16 / 9, contentMode: .fit)
                 .overlay {
@@ -122,46 +123,45 @@ struct YouTubeView: View {
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .contentShape(Rectangle())
+                .allowsHitTesting(false)
             Text(info.title).font(.headline)
             if !info.channel.isEmpty {
                 Text(info.channel).font(.subheadline).foregroundStyle(.secondary)
             }
-
-            Button {
-                downloads.start(info, audioOnly: true, option: nil)
-            } label: {
-                Label("Download Music (M4A)", systemImage: "music.note").frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(info.audio == nil)
-
-            if !info.videoOptions.isEmpty {
-                HStack {
-                    Text("Video quality")
-                    Spacer()
-                    Picker("Video quality", selection: $quality) {
-                        ForEach(info.videoOptions) { o in Text(o.label).tag(o.height) }
-                    }
-                    .pickerStyle(.menu)
-                }
-                Button {
-                    downloads.start(info, audioOnly: false, option: info.videoOptions.first { $0.height == quality })
-                } label: {
-                    Label("Download Video (MP4)", systemImage: "film").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.blue)
-                .controlSize(.large)
-            } else {
-                Label("No MP4 video stream was offered for this video, so only music can be downloaded. Turn on Settings › Backup extraction server and try again.",
-                      systemImage: "film.stack")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            Text(info.formats).font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 6)
+
+        Button {
+            downloads.start(info, audioOnly: true, option: nil)
+        } label: {
+            Label("Download Music (M4A)", systemImage: "music.note").frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .disabled(info.audio == nil)
+
+        if !info.videoOptions.isEmpty {
+            Picker("Video quality", selection: $quality) {
+                ForEach(info.videoOptions) { o in Text(o.label).tag(o.height) }
+            }
+            .pickerStyle(.menu)
+            Button {
+                downloads.start(info, audioOnly: false,
+                                option: info.videoOptions.first { $0.height == quality } ?? info.videoOptions.first)
+            } label: {
+                Label("Download Video (MP4)", systemImage: "film").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.blue)
+            .controlSize(.large)
+        } else {
+            Label("No MP4 video stream was offered for this video, so only music can be downloaded. Turn on Settings › Backup extraction server and try again.",
+                  systemImage: "film.stack")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        Text(info.formats).font(.caption2).foregroundStyle(.tertiary)
     }
 
     private func fetch() {

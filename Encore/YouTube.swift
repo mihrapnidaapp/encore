@@ -297,6 +297,7 @@ final class DownloadManager: ObservableObject {
         let job = DownloadJob(videoID: info.id, title: info.title, channel: info.channel,
                               thumbnailURL: info.thumbnailURL, audioOnly: audioOnly, height: option?.height)
         jobs.insert(job, at: 0)
+        AppState.shared.showToast(audioOnly ? "Downloading music…" : "Downloading video…")
         let jid = job.id
         tasks[jid] = Task { [weak self] in
             await self?.run(jid, info: info, audioOnly: audioOnly, option: option)
@@ -422,7 +423,9 @@ final class DownloadManager: ObservableObject {
             if Task.isCancelled || error is CancellationError {
                 update(jid) { $0.state = .failed("Cancelled") }
             } else {
-                update(jid) { $0.state = .failed(YouTubeService.describe(error)) }
+                let message = YouTubeService.describe(error)
+                update(jid) { $0.state = .failed(message) }
+                AppState.shared.showToast("Download failed: \(message)")
             }
         }
     }
