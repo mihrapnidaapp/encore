@@ -11,6 +11,7 @@ struct VideoOption: Identifiable {
     let video: YouTubeKit.Stream
     /// true when the stream has no sound and must be merged with the audio stream
     let needsAudio: Bool
+    var isH264 = true
     var label: String { height >= 720 ? "\(height)p HD" : "\(height)p" }
 }
 
@@ -22,6 +23,8 @@ struct YTInfo: Identifiable {
     let thumbnailURL: URL?
     let audio: YouTubeKit.Stream?
     let videoOptions: [VideoOption]
+    /// Short summary of what YouTube offered, shown under the buttons (helps when something is missing).
+    let formats: String
     var watchURL: String { "https://www.youtube.com/watch?v=\(id)" }
 }
 
@@ -56,42 +59,70 @@ enum YouTubeService {
     }
 
     static func fetchInfo(id: String) async throws -> YTInfo {
-        let methods: [YouTube.ExtractionMethod] = Prefs.bool(Prefs.remoteFallback) ? [.local, .remote] : [.local]
-        let yt = YouTube(videoID: id, methods: methods)
-        let streams = try await yt.streams
+        let remoteAllowed = Prefs.bool(Prefs.remoteFallback)
+        let yt = YouTube(videoID: id, methods: remoteAllowed ? [.local, .remote] : [.local])
+        var streams = try await yt.streams
+        var picked = pick(streams)
+        var source = "phone"
+
+        // The phone's own extraction sometimes returns only sound. Ask the backup server for the video streams.
+        if picked.options.isEmpty, remoteAllowed,
+           let remote = try? await YouTube(videoID: id, methods: [.remote]).streams, !remote.isEmpty {
+            let second = pick(remote)
+            if !second.options.isEmpty {
+                streams = remote
+                picked = (second.audio ?? picked.audio, second.options)
+                source = "backup server"
+            }
+        }
+        guard picked.audio != nil || !picked.options.isEmpty else { throw YTError.noStream }
+
         let meta = try? await yt.metadata
         let embed = await OnlineServices.oEmbed(videoID: id)
+        let title = meta?.title.nonEmpty ?? embed?.title.nonEmpty ?? "YouTube video"
+        let formats = "\(streams.count) formats from the \(source): "
+            + "\(streams.filterAudioOnly().count) audio, "
+            + "\(streams.filterVideoOnly().count) video-only, "
+            + "\(streams.filterVideoAndAudio().count) video+audio; "
+            + "\(picked.options.count) usable for MP4"
+        return YTInfo(id: id, title: title, channel: embed?.author ?? "",
+                      description: meta?.description ?? "",
+                      thumbnailURL: meta?.thumbnail?.url ?? URL(string: "https://i.ytimg.com/vi/\(id)/hqdefault.jpg"),
+                      audio: picked.audio, videoOptions: picked.options, formats: formats)
+    }
 
+    /// Chooses the best AAC audio and, per height, the best MP4 video the phone can play and merge.
+    private static func pick(_ streams: [YouTubeKit.Stream]) -> (audio: YouTubeKit.Stream?, options: [VideoOption]) {
         // Audio: AAC in MP4 (.m4a) plays everywhere on iOS and can be merged into MP4 video.
         let audioOnly = streams.filterAudioOnly()
         let aac = audioOnly.filter { $0.fileExtension == .m4a && $0.isNativelyPlayable }
         let audioPool = aac.isEmpty ? audioOnly.filter { $0.isNativelyPlayable } : aac
         let audio = audioPool.max { ($0.bitrate ?? 0) < ($1.bitrate ?? 0) }
 
-        // Video: H.264 MP4. Streams with sound are preferred; otherwise a silent stream + the audio above.
+        // Video with sound in one file (usually 360p) needs no merging.
         var byHeight: [Int: VideoOption] = [:]
-        for s in streams.filterVideoAndAudio() where s.isNativelyPlayable && s.fileExtension == .mp4 {
+        for s in streams.filterVideoAndAudio() where s.fileExtension == .mp4 {
             guard let h = s.videoResolution else { continue }
             byHeight[h] = VideoOption(height: h, video: s, needsAudio: false)
         }
+        // HD streams have no sound: merged with the audio above. H.264 is preferred because every
+        // iPhone plays it; other codecs the phone can decode (HEVC, AV1) are used when no H.264 exists.
         if let audio, audio.fileExtension == .m4a {
             for s in streams.filterVideoOnly() where s.fileExtension == .mp4 {
-                guard let h = s.videoResolution, let codec = s.videoCodec, case .avc1(_) = codec else { continue }
+                guard let h = s.videoResolution else { continue }
+                var isH264 = false
+                if let codec = s.videoCodec, case .avc1(_) = codec { isH264 = true }
+                guard isH264 || s.isNativelyPlayable else { continue }
+                let candidate = VideoOption(height: h, video: s, needsAudio: true, isH264: isH264)
                 if let existing = byHeight[h] {
                     if !existing.needsAudio { continue }
-                    if (existing.video.bitrate ?? 0) >= (s.bitrate ?? 0) { continue }
+                    if existing.isH264 && !isH264 { continue }
+                    if existing.isH264 == isH264, (existing.video.bitrate ?? 0) >= (s.bitrate ?? 0) { continue }
                 }
-                byHeight[h] = VideoOption(height: h, video: s, needsAudio: true)
+                byHeight[h] = candidate
             }
         }
-        let options = byHeight.values.sorted { $0.height > $1.height }
-        guard audio != nil || !options.isEmpty else { throw YTError.noStream }
-
-        let title = meta?.title.nonEmpty ?? embed?.title.nonEmpty ?? "YouTube video"
-        return YTInfo(id: id, title: title, channel: embed?.author ?? "",
-                      description: meta?.description ?? "",
-                      thumbnailURL: meta?.thumbnail?.url ?? URL(string: "https://i.ytimg.com/vi/\(id)/hqdefault.jpg"),
-                      audio: audio, videoOptions: options)
+        return (audio, byHeight.values.sorted { $0.height > $1.height })
     }
 
     /// "Artist - Song (Official Video)" → ("Artist", "Song"). Falls back to the channel name as artist.

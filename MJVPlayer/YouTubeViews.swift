@@ -150,9 +150,16 @@ struct YouTubeView: View {
                 } label: {
                     Label("Download Video (MP4)", systemImage: "film").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
                 .controlSize(.large)
+            } else {
+                Label("No MP4 video stream was offered for this video, so only music can be downloaded. Turn on Settings › Backup extraction server and try again.",
+                      systemImage: "film.stack")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
+            Text(info.formats).font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 6)
     }
