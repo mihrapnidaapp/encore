@@ -179,8 +179,13 @@ enum YouTubeService {
 
 enum FetchError: LocalizedError {
     case http(Int), empty
+    case stalled(Error, received: Int64)
     var errorDescription: String? {
         switch self {
+        case .stalled(let error, let received):
+            let reason = (error as? URLError)?.code == .timedOut ? "YouTube's video server did not answer"
+                : error.localizedDescription
+            return received > 0 ? "\(reason) after \(DownloadManager.megabytes(received))." : "\(reason) (no data received)."
         case .http(403): return "YouTube refused the download (403). Try again in a moment."
         case .http(let c): return "Server error \(c)."
         case .empty: return "The server sent an empty response."
@@ -191,7 +196,7 @@ enum FetchError: LocalizedError {
 enum Fetcher {
     static let session: URLSession = {
         let c = URLSessionConfiguration.default
-        c.timeoutIntervalForRequest = 30
+        c.timeoutIntervalForRequest = 20
         c.waitsForConnectivity = false
         return URLSession(configuration: c)
     }()
@@ -206,48 +211,84 @@ enum Fetcher {
         if let h = resp as? HTTPURLResponse, !(200..<300).contains(h.statusCode) { throw FetchError.http(h.statusCode) }
     }
 
-    /// Downloads in 8 MB ranges (YouTube throttles single long requests), retrying each range.
+    /// Downloads in 8 MB ranges (YouTube throttles single long requests). Bytes are written and reported
+    /// as they arrive, so progress moves even on a slow connection. A failed or stalled range is resumed
+    /// from the last byte received, up to 4 times in a row.
     static func download(_ url: URL, to dest: URL, expected: Int64?, progress: @escaping @Sendable (Int64) -> Void) async throws {
         FileManager.default.createFile(atPath: dest.path, contents: nil)
         let handle = try FileHandle(forWritingTo: dest)
         defer { try? handle.close() }
 
-        guard let total = expected, total > 0 else {
-            let (tmp, resp) = try await session.download(from: url)
-            try check(resp)
-            try? handle.close()
-            try? FileManager.default.removeItem(at: dest)
-            try FileManager.default.moveItem(at: tmp, to: dest)
-            progress(1)
-            return
-        }
-
         let chunk: Int64 = 8 * 1024 * 1024
+        let flushSize = 256 * 1024
+        var total = expected ?? 0
         var offset: Int64 = 0
-        while offset < total {
+        var attempt = 0
+        enum Style { case header, query, whole }
+        var style = Style.header
+        while total <= 0 || offset < total {
             try Task.checkCancellation()
-            let end = min(offset + chunk, total) - 1
-            var attempt = 0
-            while true {
-                do {
-                    var req = URLRequest(url: url)
+            // If nothing at all arrives, switch how the range is asked for: Range header, then the
+            // "range=" URL parameter the YouTube web player uses, then one plain request for the whole file.
+            if offset == 0, attempt >= 2, style == .header { style = .query; attempt = 0 }
+            else if offset == 0, attempt >= 2, style == .query { style = .whole; attempt = 0; total = 0 }
+            var req = URLRequest(url: url)
+            if total > 0, style != .whole {
+                let end = min(offset + chunk, total) - 1
+                if style == .query, var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+                    comps.queryItems = (comps.queryItems ?? []).filter { $0.name != "range" }
+                        + [URLQueryItem(name: "range", value: "\(offset)-\(end)")]
+                    req.url = comps.url ?? url
+                } else {
                     req.setValue("bytes=\(offset)-\(end)", forHTTPHeaderField: "Range")
-                    let (data, resp) = try await session.data(for: req)
-                    try check(resp)
-                    if data.isEmpty { throw FetchError.empty }
-                    try handle.write(contentsOf: data)
-                    offset += Int64(data.count)
-                    progress(offset)
-                    break
-                } catch {
-                    try Task.checkCancellation()
-                    attempt += 1
-                    if attempt >= 4 { throw error }
-                    try await Task.sleep(nanoseconds: UInt64(attempt) * 1_500_000_000)
                 }
+            } else if offset > 0 {
+                req.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range")
+            }
+            let before = offset
+            do {
+                let (bytes, resp) = try await session.bytes(for: req)
+                try check(resp)
+                if total == 0 {
+                    // Size unknown: one open-ended request; the response says how big the file is.
+                    let length = resp.expectedContentLength
+                    total = length > 0 ? offset + length : -1
+                }
+                var buffer = Data()
+                buffer.reserveCapacity(flushSize)
+                for try await byte in bytes {
+                    buffer.append(byte)
+                    if buffer.count >= flushSize {
+                        try handle.write(contentsOf: buffer)
+                        offset += Int64(buffer.count)
+                        buffer.removeAll(keepingCapacity: true)
+                        progress(offset)
+                    }
+                }
+                if !buffer.isEmpty {
+                    try handle.write(contentsOf: buffer)
+                    offset += Int64(buffer.count)
+                    progress(offset)
+                }
+                if offset == before { throw FetchError.empty }
+                attempt = 0
+                if total < 0 { break }  // unknown size: the single request delivered everything
+            } catch {
+                try Task.checkCancellation()
+                if offset > before { attempt = 0 }  // some data arrived: the range resumes where it stopped
+                attempt += 1
+                if attempt >= 4 || (style == .whole && offset == 0 && attempt >= 2) {
+                    throw FetchError.stalled(error, received: offset)
+                }
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 1_500_000_000)
             }
         }
     }
+}
+
+struct PartError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }
 
 // MARK: - Download manager
@@ -265,6 +306,8 @@ struct DownloadJob: Identifiable {
     let height: Int?
     var state: State = .waiting
     var progress: Double = 0
+    /// Extra status line: the wait before YouTube serves the file, or bytes and speed while downloading.
+    var detail = ""
     var trackID: UUID?
 
     var isActive: Bool {
@@ -336,9 +379,14 @@ final class DownloadManager: ObservableObject {
         body(&jobs[i])
     }
 
-    fileprivate func setProgress(_ id: UUID, _ p: Double) {
+    fileprivate func setProgress(_ id: UUID, _ p: Double, detail: String) {
         guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }
-        if p >= 1 || p - jobs[i].progress >= 0.01 { jobs[i].progress = min(p, 1) }
+        jobs[i].progress = min(p, 1)
+        jobs[i].detail = detail
+    }
+
+    nonisolated static func megabytes(_ bytes: Int64) -> String {
+        String(format: "%.1f MB", Double(bytes) / 1_048_576)
     }
 
     private func run(_ jid: UUID, info: YTInfo, audioOnly: Bool, option: VideoOption?) async {
@@ -375,21 +423,41 @@ final class DownloadManager: ObservableObject {
 
             let sizes = parts.map { Fetcher.contentLength($0.stream.url) ?? 0 }
             let total = max(sizes.reduce(0, +), 1)
+            let knownTotal = sizes.allSatisfy { $0 > 0 }
             var done: Int64 = 0
             let partCount = parts.count
             for (i, part) in parts.enumerated() {
+                // Videos with preroll ads are served only once the ad could have been skipped.
+                let wait = Int(part.stream.availableAt.timeIntervalSinceNow.rounded(.up))
+                if wait > 0 {
+                    update(jid) { $0.detail = "YouTube asks to wait \(wait) s before the download…" }
+                }
                 try await part.stream.waitUntilAvailable()
+                update(jid) { $0.detail = "Connecting…" }
                 let base = done
                 let size = sizes[i]
                 let manager = self
-                try await Fetcher.download(part.stream.url, to: part.file, expected: size > 0 ? size : nil) { bytes in
-                    let p = size > 0 ? Double(base + bytes) / Double(total) : Double(i + 1) / Double(partCount)
-                    Task { @MainActor in manager.setProgress(jid, p) }
+                let started = Date()
+                let partName = partCount > 1 ? (i == 0 ? "Video" : "Sound") : (audioOnly ? "Music" : "Video")
+                let host = part.stream.url.host ?? "?"
+                do {
+                    try await Fetcher.download(part.stream.url, to: part.file, expected: size > 0 ? size : nil) { bytes in
+                        let p = knownTotal ? Double(base + bytes) / Double(total)
+                                           : (Double(i) + (size > 0 ? Double(bytes) / Double(size) : 0.5)) / Double(partCount)
+                        let elapsed = max(Date().timeIntervalSince(started), 0.1)
+                        var text = DownloadManager.megabytes(base + bytes)
+                        if knownTotal { text += " of " + DownloadManager.megabytes(total) }
+                        text += " · " + DownloadManager.megabytes(Int64(Double(bytes) / elapsed)) + "/s"
+                        if partCount > 1 { text += i == 0 ? " · video" : " · sound" }
+                        Task { @MainActor in manager.setProgress(jid, p, detail: text) }
+                    }
+                } catch let error as FetchError {
+                    throw PartError(message: "\(partName): \(error.localizedDescription) [\(host)]")
                 }
-                done += sizes[i]
+                done += size > 0 ? size : (try? part.file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
             }
 
-            update(jid) { $0.state = .processing; $0.progress = 1 }
+            update(jid) { $0.state = .processing; $0.progress = 1; $0.detail = "" }
             let thumb = await thumbTask
             let cover = thumb.map { ImageTools.prepared($0, square: audioOnly) }
             let tags = MediaExporter.metadata(title: names.title, artist: names.artist, album: "",

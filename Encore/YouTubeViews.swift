@@ -220,9 +220,14 @@ struct DownloadRow: View {
         case .waiting:
             Text("Waiting…").font(.caption).foregroundStyle(.secondary)
         case .downloading:
-            HStack(spacing: 6) {
-                ProgressView(value: job.progress)
-                Text("\(Int(job.progress * 100))%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    ProgressView(value: job.progress)
+                    Text("\(Int(job.progress * 100))%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                if !job.detail.isEmpty {
+                    Text(job.detail).font(.caption2.monospacedDigit()).foregroundStyle(.secondary).lineLimit(2)
+                }
             }
         case .processing:
             Text("Saving…").font(.caption).foregroundStyle(.secondary)
