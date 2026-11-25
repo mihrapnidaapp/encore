@@ -1,4 +1,4 @@
-name: MJVPlayer
+name: Encore
 options:
   bundleIdPrefix: com.mjv
   deploymentTarget:
@@ -8,28 +8,29 @@ packages:
     url: https://github.com/alexeichhorn/YouTubeKit
     branch: main
 targets:
-  MJVPlayer:
+  Encore:
     type: application
     platform: iOS
     sources:
-      - path: MJVPlayer
+      - path: Encore
     dependencies:
       - package: YouTubeKit
     settings:
       base:
-        PRODUCT_NAME: MJVPlayer
+        PRODUCT_NAME: Encore
+        # Kept from the first name (MJV Player): changing it would install a separate app with an empty library.
         PRODUCT_BUNDLE_IDENTIFIER: com.mjv.player
-        INFOPLIST_FILE: MJVPlayer/Info.plist
+        INFOPLIST_FILE: Encore/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         TARGETED_DEVICE_FAMILY: "1,2"
-        MARKETING_VERSION: "1.1.4"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "1.2.0"
+        CURRENT_PROJECT_VERSION: "7"
         SWIFT_VERSION: "5.0"
         ENABLE_PREVIEWS: NO
 schemes:
-  MJVPlayer:
+  Encore:
     build:
       targets:
-        MJVPlayer: all
+        Encore: all

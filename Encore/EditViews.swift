@@ -306,7 +306,7 @@ struct SettingsView: View {
             } header: {
                 Text("Library")
             } footer: {
-                Text("Covers come from the iTunes Search API, lyrics from LRCLIB. Files you copy into On My iPhone › MJV Player are imported automatically.")
+                Text("Covers come from the iTunes Search API, lyrics from LRCLIB. Files you copy into On My iPhone › Encore are imported automatically.")
             }
 
             Section {
@@ -343,7 +343,7 @@ struct SettingsView: View {
 
             Section("About") {
                 LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")
-                Text("MJV Player plays music and videos stored on this device. YouTube downloads are for your own offline use.")
+                Text("Encore plays music and videos stored on this device. YouTube downloads are for your own offline use.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }

@@ -6,10 +6,11 @@ import UIKit
 
 enum Paths {
     static var documents: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
-    /// Visible in the Files app: On My iPhone › MJV Player › Media
+    /// Visible in the Files app: On My iPhone › Encore › Media
     static var media: URL { documents.appendingPathComponent("Media", isDirectory: true) }
     static var support: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            // Kept as "MJVPlayer" from the app's first name so existing libraries are found.
             .appendingPathComponent("MJVPlayer", isDirectory: true)
     }
     static var artwork: URL { support.appendingPathComponent("Artwork", isDirectory: true) }

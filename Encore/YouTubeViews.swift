@@ -87,7 +87,7 @@ struct YouTubeView: View {
                         }
                     }
                 } footer: {
-                    Text("Keep the app open while downloading. Files are saved in Files › On My iPhone › MJV Player › Media.")
+                    Text("Keep the app open while downloading. Files are saved in Files › On My iPhone › Encore › Media.")
                 }
             }
         }

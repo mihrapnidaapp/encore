@@ -12,7 +12,7 @@ struct CoverResult: Identifiable, Hashable {
 
 /// iTunes Search (covers), LRCLIB (lyrics) and YouTube oEmbed (channel name). None need an API key.
 enum OnlineServices {
-    private static let userAgent = "MJVPlayer/1.0 (personal iOS music player)"
+    private static let userAgent = "Encore/1.2 (personal iOS media player)"
 
     private struct ITunesResponse: Decodable {
         struct Item: Decodable {

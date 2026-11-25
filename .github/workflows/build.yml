@@ -20,7 +20,7 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild -version
-          if ! xcodebuild -project MJVPlayer.xcodeproj -scheme MJVPlayer -configuration Release \
+          if ! xcodebuild -project Encore.xcodeproj -scheme Encore -configuration Release \
               -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
               -skipPackagePluginValidation -skipMacroValidation \
               CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
@@ -29,19 +29,19 @@ jobs:
             tail -40 build.log
             exit 1
           fi
-          grep -E "warning:" build.log | grep "/MJVPlayer/" | sort -u | head -80 || true
-          test -f build/Build/Products/Release-iphoneos/MJVPlayer.app/MJVPlayer
+          grep -E "warning:" build.log | grep "/Encore/" | sort -u | head -80 || true
+          test -f build/Build/Products/Release-iphoneos/Encore.app/Encore
 
       - name: Package IPA
         run: |
           mkdir Payload
-          cp -R build/Build/Products/Release-iphoneos/MJVPlayer.app Payload/
-          zip -qry MJVPlayer.ipa Payload
-          ls -l MJVPlayer.ipa
-          shasum -a 256 MJVPlayer.ipa
+          cp -R build/Build/Products/Release-iphoneos/Encore.app Payload/
+          zip -qry Encore.ipa Payload
+          ls -l Encore.ipa
+          shasum -a 256 Encore.ipa
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MJVPlayer-ipa
-          path: MJVPlayer.ipa
+          name: Encore-ipa
+          path: Encore.ipa
           retention-days: 30

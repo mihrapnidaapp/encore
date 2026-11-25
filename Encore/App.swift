@@ -2,7 +2,7 @@ import SwiftUI
 import AVFoundation
 
 @main
-struct MJVPlayerApp: App {
+struct EncoreApp: App {
     @StateObject private var library = LibraryStore.shared
     @StateObject private var player = PlayerEngine.shared
     @StateObject private var downloads = DownloadManager.shared

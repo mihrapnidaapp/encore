@@ -1,12 +1,15 @@
-# MJV Player (iOS, native Swift)
+# Encore (iOS, native Swift)
 
-A native SwiftUI rewrite of the `mjvmediaplayer` web app: an offline music and video player for iPhone and iPad,
-with YouTube / YouTube Music downloads.
+An offline music and video player for iPhone and iPad, with YouTube / YouTube Music downloads.
+It started as a SwiftUI rewrite of the `mjvmediaplayer` web app and was first called MJV Player.
+
+The bundle ID is still `com.mjv.player`, and the data folder inside the app is still `MJVPlayer`. Both are
+kept so that installing Encore over MJV Player keeps the library, playlists and downloads.
 
 ## Features
 - **Library:** songs, albums, artists, videos, playlists, favorites, recently added/played, most played, search, sort and filter.
-- **Import:** from the Files app (files or whole folders), "Open in MJV Player" from other apps, and anything copied
-  into *On My iPhone › MJV Player*. Reads tags (title, artist, album, genre, year, track number, embedded cover).
+- **Import:** from the Files app (files or whole folders), "Open in Encore" from other apps, and anything copied
+  into *On My iPhone › Encore*. Reads tags (title, artist, album, genre, year, track number, embedded cover).
   A matching image file, or `cover.jpg` / `folder.jpg`, becomes the cover.
 - **Covers:** missing song covers are found on iTunes automatically. You can also search covers or posters by hand,
   pick one from Photos, or use a frame from the video.
@@ -33,7 +36,7 @@ with YouTube / YouTube Music downloads.
 
 ## Build
 GitHub Actions (`.github/workflows/build.yml`) generates the Xcode project with XcodeGen (`project.yml`). It then builds an
-unsigned `MJVPlayer.ipa` on macOS for every push to `main`. Download it from the run's *Artifacts* and install it with
+unsigned `Encore.ipa` on macOS for every push to `main`. Download it from the run's *Artifacts* and install it with
 Sideloadly, which signs it with your Apple ID. With a free Apple ID the app must be re-signed every 7 days.
 
 YouTube extraction uses [YouTubeKit](https://github.com/alexeichhorn/YouTubeKit) (`main` branch, which follows YouTube's changes).
