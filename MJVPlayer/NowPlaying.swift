@@ -14,8 +14,7 @@ struct NowPlayingView: View {
     @State private var background: UIImage?
 
     var body: some View {
-        ZStack {
-            backdrop
+        Group {
             if let t = player.currentTrack {
                 VStack(spacing: 0) {
                     header(t)
@@ -37,6 +36,10 @@ struct NowPlayingView: View {
                 }
             }
         }
+        // The content decides the size; the backdrop only fills behind it. (A scaled-to-fill image
+        // inside a ZStack made the whole screen wider than the phone.)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(backdrop)
         .foregroundStyle(.white)
         .tint(.white)
         .task(id: player.currentTrack?.artworkFile) {
@@ -54,11 +57,15 @@ struct NowPlayingView: View {
         ZStack {
             Color(red: 0.05, green: 0.05, blue: 0.07)
             if let background {
-                Image(uiImage: background)
-                    .resizable()
-                    .scaledToFill()
-                    .blur(radius: 70)
-                    .opacity(0.85)
+                Color.clear
+                    .overlay(
+                        Image(uiImage: background)
+                            .resizable()
+                            .scaledToFill()
+                            .blur(radius: 70)
+                            .opacity(0.85)
+                    )
+                    .clipped()
             }
             LinearGradient(colors: [Color.black.opacity(0.15), Color.black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
         }
