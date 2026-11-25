@@ -131,9 +131,9 @@ enum Equalizer {
             unprepare: nil,
             process: eqTapProcess
         )
-        var tap: MTAudioProcessingTap?
-        let status = MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tap)
-        guard status == noErr, let tap else {
+        var tapRef: Unmanaged<MTAudioProcessingTap>?
+        let status = MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, kMTAudioProcessingTapCreationFlag_PostEffects, &tapRef)
+        guard status == noErr, let tap = tapRef?.takeRetainedValue() else {
             Unmanaged<EQTapContext>.fromOpaque(info).release()
             return nil
         }

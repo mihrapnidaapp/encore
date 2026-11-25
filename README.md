@@ -17,11 +17,19 @@ with YouTube / YouTube Music downloads.
   - "Artist - Song (Official Video)" titles are cleaned up.
 - **Now Playing:** large artwork over a blurred background, synced lyrics (LRCLIB) that scroll with the song and can
   be tapped to seek, queue (reorder, remove, play next / add to queue), shuffle, repeat one/all, speed 0.5–2×,
-  sleep timer (minutes or end of track) with fade-out, AirPlay, favorite (or double-tap the artwork), swipe the artwork
-  for next/previous.
+  sleep timer (minutes or end of track) with fade-out, AirPlay and a volume slider.
+  - **Seeking:** drag the progress bar in Now Playing or in the mini player.
+  - **Previous:** the first press restarts the song; pressing again within 4 seconds goes to the previous song.
+  - **Artwork gestures:** double-tap the left or right side to jump 10 s, or the middle to favorite. Swipe for next/previous.
+  - **A-B loop:** repeats a section of a song.
+- **Sound:** 10-band equalizer with 23 presets and preamp, and crossfade between songs (0–12 s).
 - **Video:** inline player with full screen and Picture in Picture. The sound keeps playing in the background.
-- **Everywhere:** lock-screen and Control Center controls with artwork, headphone controls, resumes long tracks and videos
-  where you left off, and remembers the queue after a restart.
+- **Everywhere:** lock-screen, Control Center and car (CarPlay Now Playing / Bluetooth) controls with artwork.
+  - Long videos and podcasts get ±15 s buttons on the lock screen.
+  - Playback pauses when headphones are unplugged.
+  - Long tracks and videos resume where you left off, and the queue is remembered after a restart.
+- **CarPlay library browsing** is not included: it needs a CarPlay entitlement from Apple, which a sideloaded app
+  signed with a personal Apple ID cannot have.
 
 ## Build
 GitHub Actions (`.github/workflows/build.yml`) generates the Xcode project with XcodeGen (`project.yml`). It then builds an
