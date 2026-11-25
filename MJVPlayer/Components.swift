@@ -208,8 +208,9 @@ struct PlayShuffleButtons: View {
             }
             Button {
                 player.play(tracks, shuffled: true, context: context)
+                app.showToast("Playing in random order")
             } label: {
-                Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity)
+                Label("Random", systemImage: "shuffle").frame(maxWidth: .infinity)
             }
         }
         .font(.headline)
@@ -217,6 +218,86 @@ struct PlayShuffleButtons: View {
         .controlSize(.large)
         .tint(Color.accentColor)
         .disabled(tracks.isEmpty)
+    }
+}
+
+// MARK: - Shuffle and repeat
+
+/// Two labelled switches that always say their state in words ("Shuffle: On", "Repeat: 1 Song")
+/// and turn solid pink when on. Shown in Now Playing and under every song list.
+struct PlaybackModesBar: View {
+    @EnvironmentObject var player: PlayerEngine
+    @EnvironmentObject var app: AppState
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                player.toggleShuffle()
+                app.showToast(player.shuffle ? "Shuffle on: the next songs come in random order"
+                                             : "Shuffle off: songs play in list order")
+            } label: {
+                ModePill(icon: "shuffle", text: player.shuffle ? "Shuffle: On" : "Shuffle: Off", on: player.shuffle)
+            }
+            .buttonStyle(.plain)
+
+            Menu {
+                RepeatChoices()
+            } label: {
+                ModePill(icon: player.repeatMode == .one ? "repeat.1" : "repeat",
+                         text: Self.repeatTitle(player.repeatMode), on: player.repeatMode != .off)
+            } primaryAction: {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                player.cycleRepeat()
+                app.showToast(Self.repeatExplanation(player.repeatMode))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    static func repeatTitle(_ m: RepeatMode) -> String {
+        switch m {
+        case .off: return "Repeat: Off"
+        case .all: return "Repeat: All"
+        case .one: return "Repeat: 1 Song"
+        }
+    }
+
+    static func repeatExplanation(_ m: RepeatMode) -> String {
+        switch m {
+        case .off: return "Repeat off: stops after the last song"
+        case .all: return "Repeat all: the list plays non-stop"
+        case .one: return "Repeat 1 song: this song plays over and over"
+        }
+    }
+}
+
+struct RepeatChoices: View {
+    @EnvironmentObject var player: PlayerEngine
+    var body: some View {
+        Button { player.setRepeat(.off) } label: { Label("Repeat Off", systemImage: "arrow.right") }
+        Button { player.setRepeat(.all) } label: { Label("Repeat All (non-stop)", systemImage: "repeat") }
+        Button { player.setRepeat(.one) } label: { Label("Repeat 1 Song", systemImage: "repeat.1") }
+    }
+}
+
+struct ModePill: View {
+    let icon: String
+    let text: String
+    let on: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(.subheadline.weight(.bold))
+            Text(text).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 9)
+        .foregroundStyle(on ? Color.white : Color.white.opacity(0.7))
+        .background(Capsule().fill(on ? Color.brand : Color.white.opacity(0.12)))
+        .overlay(Capsule().stroke(on ? Color.clear : Color.white.opacity(0.25), lineWidth: 1))
+        .contentShape(Capsule())
+        .animation(.easeInOut(duration: 0.2), value: on)
     }
 }
 
@@ -242,6 +323,8 @@ struct TracksView: View {
         List {
             if !tracks.isEmpty {
                 PlayShuffleButtons(tracks: list, context: title)
+                    .listRowSeparator(.hidden)
+                PlaybackModesBar()
                     .listRowSeparator(.hidden)
             }
             ForEach(Array(list.enumerated()), id: \.element.id) { i, t in

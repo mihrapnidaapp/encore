@@ -152,6 +152,7 @@ struct AlbumDetailView: View {
                     Text([album.year.nonEmpty, "\(album.tracks.count) songs", formatTime(total)].compactMap { $0 }.joined(separator: " · "))
                         .font(.caption).foregroundStyle(.secondary)
                     PlayShuffleButtons(tracks: album.tracks, context: album.name).padding(.top, 6)
+                    PlaybackModesBar().padding(.top, 4)
                 }
                 .frame(maxWidth: .infinity)
                 .listRowSeparator(.hidden)
@@ -297,6 +298,7 @@ struct PlaylistDetailView: View {
                     Text("\(items.count) items · \(formatTime(items.reduce(0) { $0 + $1.duration }))")
                         .font(.caption).foregroundStyle(.secondary)
                     PlayShuffleButtons(tracks: items, context: pl.name).padding(.top, 6)
+                    PlaybackModesBar().padding(.top, 4)
                 }
                 .frame(maxWidth: .infinity)
                 .listRowSeparator(.hidden)

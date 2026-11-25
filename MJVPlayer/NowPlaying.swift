@@ -25,6 +25,7 @@ struct NowPlayingView: View {
                     titleRow(t).padding(.horizontal, 24)
                     ScrubberView().padding(.top, 10)
                     controls(t).padding(.top, 2)
+                    PlaybackModesBar().padding(.horizontal, 24).padding(.top, 6)
                     VolumeRow().padding(.horizontal, 24).padding(.top, 8)
                     bottomBar(t).padding(.top, 12)
                 }
@@ -79,7 +80,7 @@ struct NowPlayingView: View {
             Spacer()
             Menu {
                 Menu {
-                    repeatChoices
+                    RepeatChoices()
                 } label: {
                     Label("Repeat: " + (player.repeatMode == .off ? "Off" : player.repeatMode == .all ? "All" : "This Song"),
                           systemImage: player.repeatMode == .one ? "repeat.1" : "repeat")
@@ -180,17 +181,6 @@ struct NowPlayingView: View {
 
     private func controls(_ t: Track) -> some View {
         HStack {
-            Button {
-                haptic()
-                player.toggleShuffle()
-                app.showToast(player.shuffle ? "Shuffle on: songs play in random order" : "Shuffle off: songs play in order")
-            } label: {
-                ModeIcon(symbol: "shuffle", active: player.shuffle)
-            }
-            .contextMenu {
-                Button { player.setShuffle(false) } label: { Label("Play in Order", systemImage: "arrow.right") }
-                Button { player.setShuffle(true) } label: { Label("Shuffle", systemImage: "shuffle") }
-            }
             Spacer()
             if t.kind == .video {
                 Button { player.skip(by: -15) } label: { Image(systemName: "gobackward.15").font(.title2) }
@@ -210,14 +200,6 @@ struct NowPlayingView: View {
                 Button { player.skip(by: 15) } label: { Image(systemName: "goforward.15").font(.title2) }
                 Spacer()
             }
-            Button {
-                haptic()
-                player.cycleRepeat()
-                app.showToast(repeatText(player.repeatMode))
-            } label: {
-                ModeIcon(symbol: player.repeatMode == .one ? "repeat.1" : "repeat", active: player.repeatMode != .off)
-            }
-            .contextMenu { repeatChoices }
         }
         .padding(.horizontal, 28)
     }
@@ -289,49 +271,10 @@ struct NowPlayingView: View {
         .padding(.horizontal, 22)
     }
 
-    @ViewBuilder private var repeatChoices: some View {
-        Button { player.setRepeat(.off) } label: { Label("Repeat Off", systemImage: "arrow.right") }
-        Button { player.setRepeat(.all) } label: { Label("Repeat All (play continuously)", systemImage: "repeat") }
-        Button { player.setRepeat(.one) } label: { Label("Repeat This Song", systemImage: "repeat.1") }
-    }
-
-    private func repeatText(_ m: RepeatMode) -> String {
-        switch m {
-        case .off: return "Repeat off: stops after the last song"
-        case .all: return "Repeat all: the list plays continuously"
-        case .one: return "Repeat one: this song plays over and over"
-        }
-    }
-
     private func haptic() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
 
     private func speedText(_ r: Double) -> String {
         r == r.rounded() ? "\(Int(r))×" : String(format: "%g×", r)
-    }
-}
-
-// MARK: - Mode buttons
-
-/// Shuffle and repeat: when on, the icon turns pink on a pink tile with a dot underneath,
-/// so the state is visible at a glance.
-struct ModeIcon: View {
-    let symbol: String
-    let active: Bool
-
-    var body: some View {
-        VStack(spacing: 3) {
-            Image(systemName: symbol)
-                .font(.title3.weight(active ? .bold : .regular))
-                .foregroundStyle(active ? Color.brand : Color.white.opacity(0.55))
-                .frame(width: 40, height: 34)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(active ? Color.brand.opacity(0.22) : Color.clear))
-            Circle()
-                .fill(active ? Color.brand : Color.clear)
-                .frame(width: 5, height: 5)
-        }
-        .animation(.easeInOut(duration: 0.2), value: active)
-        .accessibilityValue(active ? "On" : "Off")
     }
 }
 
