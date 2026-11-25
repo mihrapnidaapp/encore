@@ -78,6 +78,13 @@ struct NowPlayingView: View {
             }
             Spacer()
             Menu {
+                Menu {
+                    repeatChoices
+                } label: {
+                    Label("Repeat: " + (player.repeatMode == .off ? "Off" : player.repeatMode == .all ? "All" : "This Song"),
+                          systemImage: player.repeatMode == .one ? "repeat.1" : "repeat")
+                }
+                Divider()
                 Button { app.playlistPicker = PlaylistPickerRequest(trackIDs: [t.id]) } label: {
                     Label("Add to Playlist…", systemImage: "music.note.list")
                 }
@@ -166,16 +173,23 @@ struct NowPlayingView: View {
             Button { library.toggleFavorite(t.id) } label: {
                 Image(systemName: t.favorite ? "heart.fill" : "heart")
                     .font(.title2)
-                    .foregroundStyle(t.favorite ? Color.accentColor : Color.white.opacity(0.8))
+                    .foregroundStyle(t.favorite ? Color.brand : Color.white.opacity(0.8))
             }
         }
     }
 
     private func controls(_ t: Track) -> some View {
         HStack {
-            Button { player.toggleShuffle() } label: {
-                Image(systemName: "shuffle").font(.title3)
-                    .foregroundStyle(player.shuffle ? Color.accentColor : Color.white.opacity(0.7))
+            Button {
+                haptic()
+                player.toggleShuffle()
+                app.showToast(player.shuffle ? "Shuffle on: songs play in random order" : "Shuffle off: songs play in order")
+            } label: {
+                ModeIcon(symbol: "shuffle", active: player.shuffle)
+            }
+            .contextMenu {
+                Button { player.setShuffle(false) } label: { Label("Play in Order", systemImage: "arrow.right") }
+                Button { player.setShuffle(true) } label: { Label("Shuffle", systemImage: "shuffle") }
             }
             Spacer()
             if t.kind == .video {
@@ -196,10 +210,14 @@ struct NowPlayingView: View {
                 Button { player.skip(by: 15) } label: { Image(systemName: "goforward.15").font(.title2) }
                 Spacer()
             }
-            Button { player.cycleRepeat() } label: {
-                Image(systemName: player.repeatMode == .one ? "repeat.1" : "repeat").font(.title3)
-                    .foregroundStyle(player.repeatMode == .off ? Color.white.opacity(0.7) : Color.accentColor)
+            Button {
+                haptic()
+                player.cycleRepeat()
+                app.showToast(repeatText(player.repeatMode))
+            } label: {
+                ModeIcon(symbol: player.repeatMode == .one ? "repeat.1" : "repeat", active: player.repeatMode != .off)
             }
+            .contextMenu { repeatChoices }
         }
         .padding(.horizontal, 28)
     }
@@ -258,12 +276,12 @@ struct NowPlayingView: View {
                     .padding(.horizontal, 5)
                     .padding(.vertical, 3)
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(lineWidth: 1.5))
-                    .foregroundStyle(player.loopA != nil ? Color.accentColor : Color.white)
+                    .foregroundStyle(player.loopA != nil ? Color.brand : Color.white)
             }
             Spacer()
             Button { showSound = true } label: {
                 Image(systemName: "slider.vertical.3").font(.title3)
-                    .foregroundStyle(eq.enabled ? Color.accentColor : Color.white)
+                    .foregroundStyle(eq.enabled ? Color.brand : Color.white)
             }
             Spacer()
             Button { showQueue = true } label: { Image(systemName: "list.bullet").font(.title3) }
@@ -271,10 +289,49 @@ struct NowPlayingView: View {
         .padding(.horizontal, 22)
     }
 
+    @ViewBuilder private var repeatChoices: some View {
+        Button { player.setRepeat(.off) } label: { Label("Repeat Off", systemImage: "arrow.right") }
+        Button { player.setRepeat(.all) } label: { Label("Repeat All (play continuously)", systemImage: "repeat") }
+        Button { player.setRepeat(.one) } label: { Label("Repeat This Song", systemImage: "repeat.1") }
+    }
+
+    private func repeatText(_ m: RepeatMode) -> String {
+        switch m {
+        case .off: return "Repeat off: stops after the last song"
+        case .all: return "Repeat all: the list plays continuously"
+        case .one: return "Repeat one: this song plays over and over"
+        }
+    }
+
     private func haptic() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
 
     private func speedText(_ r: Double) -> String {
         r == r.rounded() ? "\(Int(r))×" : String(format: "%g×", r)
+    }
+}
+
+// MARK: - Mode buttons
+
+/// Shuffle and repeat: when on, the icon turns pink on a pink tile with a dot underneath,
+/// so the state is visible at a glance.
+struct ModeIcon: View {
+    let symbol: String
+    let active: Bool
+
+    var body: some View {
+        VStack(spacing: 3) {
+            Image(systemName: symbol)
+                .font(.title3.weight(active ? .bold : .regular))
+                .foregroundStyle(active ? Color.brand : Color.white.opacity(0.55))
+                .frame(width: 40, height: 34)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(active ? Color.brand.opacity(0.22) : Color.clear))
+            Circle()
+                .fill(active ? Color.brand : Color.clear)
+                .frame(width: 5, height: 5)
+        }
+        .animation(.easeInOut(duration: 0.2), value: active)
+        .accessibilityValue(active ? "On" : "Off")
     }
 }
 
@@ -320,12 +377,12 @@ struct ScrubberView: View {
                 if let a = player.loopA, dur > 0 {
                     let b = player.loopB ?? a
                     Rectangle()
-                        .fill(Color.accentColor.opacity(0.5))
+                        .fill(Color.brand.opacity(0.5))
                         .frame(width: max(w * (b - a) / dur, 2), height: thickness + 6)
                         .offset(x: w * a / dur)
                 }
                 Capsule()
-                    .fill(compact ? Color.accentColor : Color.white)
+                    .fill(compact ? Color.brand : Color.white)
                     .frame(width: max(w * frac, thickness), height: thickness)
                 if !compact {
                     Circle()

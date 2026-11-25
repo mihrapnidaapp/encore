@@ -345,16 +345,31 @@ final class PlayerEngine: ObservableObject {
             index = restored.firstIndex(of: current) ?? 0
             shuffle = false
         }
+        MPRemoteCommandCenter.shared().changeShuffleModeCommand.currentShuffleType = shuffle ? .items : .off
         persistState()
     }
 
     func cycleRepeat() {
         switch repeatMode {
-        case .off: repeatMode = .all
-        case .all: repeatMode = .one
-        case .one: repeatMode = .off
+        case .off: setRepeat(.all)
+        case .all: setRepeat(.one)
+        case .one: setRepeat(.off)
+        }
+    }
+
+    func setRepeat(_ mode: RepeatMode) {
+        repeatMode = mode
+        let c = MPRemoteCommandCenter.shared()
+        switch mode {
+        case .off: c.changeRepeatModeCommand.currentRepeatType = .off
+        case .all: c.changeRepeatModeCommand.currentRepeatType = .all
+        case .one: c.changeRepeatModeCommand.currentRepeatType = .one
         }
         persistState()
+    }
+
+    func setShuffle(_ on: Bool) {
+        if on != shuffle { toggleShuffle() }
     }
 
     private func itemEnded(_ item: AVPlayerItem?) {
@@ -635,12 +650,21 @@ final class PlayerEngine: ObservableObject {
             Task { @MainActor in self?.skip(by: -15) }
             return .success
         }
-        c.changeRepeatModeCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.cycleRepeat() }
+        c.changeRepeatModeCommand.addTarget { [weak self] event in
+            guard let e = event as? MPChangeRepeatModeCommandEvent else { return .commandFailed }
+            let mode: RepeatMode
+            switch e.repeatType {
+            case .one: mode = .one
+            case .all: mode = .all
+            default: mode = .off
+            }
+            Task { @MainActor in self?.setRepeat(mode) }
             return .success
         }
-        c.changeShuffleModeCommand.addTarget { [weak self] _ in
-            Task { @MainActor in self?.toggleShuffle() }
+        c.changeShuffleModeCommand.addTarget { [weak self] event in
+            guard let e = event as? MPChangeShuffleModeCommandEvent else { return .commandFailed }
+            let on = e.shuffleType != .off
+            Task { @MainActor in self?.setShuffle(on) }
             return .success
         }
         c.likeCommand.addTarget { [weak self] _ in

@@ -1,5 +1,11 @@
 import SwiftUI
 
+extension Color {
+    /// The app's pink. Used instead of the accent color on screens that tint everything white,
+    /// where `Color.accentColor` would also turn white.
+    static let brand = Color(red: 1, green: 0.231, blue: 0.361)
+}
+
 // MARK: - Artwork
 
 struct ArtworkView: View {

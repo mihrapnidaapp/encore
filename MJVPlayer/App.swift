@@ -203,7 +203,13 @@ struct MiniPlayerView: View {
                     ArtworkView(track: t, size: 44, corner: 6)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(t.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Text(t.displayArtist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        HStack(spacing: 4) {
+                            if player.shuffle { Image(systemName: "shuffle") }
+                            if player.repeatMode != .off { Image(systemName: player.repeatMode == .one ? "repeat.1" : "repeat") }
+                            Text(t.displayArtist).lineLimit(1)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 4)
                     Button { player.previous() } label: {
