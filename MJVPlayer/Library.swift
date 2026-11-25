@@ -30,11 +30,12 @@ enum Prefs {
     static let remoteFallback = "remoteFallback"
     static let videoHeight = "videoHeight"
     static let resumeLong = "resumeLong"
+    static let crossfade = "crossfade"
 
     static func register() {
         UserDefaults.standard.register(defaults: [
             autoCovers: true, autoLyrics: true, cleanTitles: true,
-            remoteFallback: true, videoHeight: 1080, resumeLong: true,
+            remoteFallback: true, videoHeight: 1080, resumeLong: true, crossfade: 0.0,
         ])
     }
     static func bool(_ key: String) -> Bool { UserDefaults.standard.bool(forKey: key) }

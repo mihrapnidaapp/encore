@@ -1,12 +1,16 @@
 import SwiftUI
 import AVKit
+import MediaPlayer
 
 struct NowPlayingView: View {
     @EnvironmentObject var player: PlayerEngine
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var app: AppState
+    @ObservedObject private var eq = EqualizerStore.shared
     @State private var showLyrics = false
     @State private var showQueue = false
+    @State private var showSound = false
+    @State private var skipFlash: String?
     @State private var background: UIImage?
 
     var body: some View {
@@ -19,9 +23,10 @@ struct NowPlayingView: View {
                     stage(t)
                     Spacer(minLength: 10)
                     titleRow(t).padding(.horizontal, 24)
-                    ScrubberView(clock: player.clock).padding(.top, 14)
-                    controls(t).padding(.top, 6)
-                    bottomBar(t).padding(.top, 14)
+                    ScrubberView().padding(.top, 10)
+                    controls(t).padding(.top, 2)
+                    VolumeRow().padding(.horizontal, 24).padding(.top, 8)
+                    bottomBar(t).padding(.top, 12)
                 }
                 .padding(.bottom, 12)
             } else {
@@ -37,6 +42,7 @@ struct NowPlayingView: View {
             if let f = player.currentTrack?.artworkFile { background = await ArtworkCache.shared.image(f) } else { background = nil }
         }
         .sheet(isPresented: $showQueue) { QueueView().withAppEnvironment() }
+        .sheet(isPresented: $showSound) { EqualizerView().withAppEnvironment() }
         .modifier(GlobalPresenters(inNowPlaying: true))
         .overlay(alignment: .top) { ToastOverlay() }
     }
@@ -105,12 +111,48 @@ struct NowPlayingView: View {
                 .scaleEffect(player.isPlaying ? 1 : 0.86)
                 .animation(.spring(response: 0.45, dampingFraction: 0.75), value: player.isPlaying)
                 .padding(.horizontal, 28)
-                .gesture(DragGesture(minimumDistance: 30).onEnded { v in
+                .overlay {
+                    // Double-tap the left or right side to jump 10 seconds, the middle to favorite.
+                    HStack(spacing: 0) {
+                        Color.clear.contentShape(Rectangle())
+                            .onTapGesture(count: 2) { jump(-10) }
+                        Color.clear.contentShape(Rectangle())
+                            .onTapGesture(count: 2) {
+                                flash(t.favorite ? "heart.slash.fill" : "heart.fill")
+                                library.toggleFavorite(t.id)
+                            }
+                        Color.clear.contentShape(Rectangle())
+                            .onTapGesture(count: 2) { jump(10) }
+                    }
+                }
+                .overlay {
+                    if let skipFlash {
+                        Image(systemName: skipFlash)
+                            .font(.system(size: 44, weight: .semibold))
+                            .padding(22)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { v in
                     if v.translation.height > 80 { app.showNowPlaying = false }
                     else if v.translation.width < -60 { player.next() }
                     else if v.translation.width > 60 { player.previous() }
                 })
-                .onTapGesture(count: 2) { library.toggleFavorite(t.id) }
+        }
+    }
+
+    private func jump(_ seconds: Double) {
+        player.skip(by: seconds)
+        flash(seconds < 0 ? "gobackward.10" : "goforward.10")
+    }
+
+    private func flash(_ symbol: String) {
+        haptic()
+        withAnimation(.easeOut(duration: 0.15)) { skipFlash = symbol }
+        Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            if skipFlash == symbol { withAnimation(.easeIn(duration: 0.25)) { skipFlash = nil } }
         }
     }
 
@@ -140,15 +182,15 @@ struct NowPlayingView: View {
                 Button { player.skip(by: -15) } label: { Image(systemName: "gobackward.15").font(.title2) }
                 Spacer()
             }
-            Button { player.previous() } label: { Image(systemName: "backward.fill").font(.system(size: 30)) }
+            Button { haptic(); player.previous() } label: { Image(systemName: "backward.fill").font(.system(size: 30)) }
             Spacer()
-            Button { player.togglePlay() } label: {
+            Button { haptic(); player.togglePlay() } label: {
                 Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 72))
+                    .font(.system(size: 68))
                     .symbolRenderingMode(.hierarchical)
             }
             Spacer()
-            Button { player.next() } label: { Image(systemName: "forward.fill").font(.system(size: 30)) }
+            Button { haptic(); player.next() } label: { Image(systemName: "forward.fill").font(.system(size: 30)) }
             Spacer()
             if t.kind == .video {
                 Button { player.skip(by: 15) } label: { Image(systemName: "goforward.15").font(.title2) }
@@ -210,10 +252,26 @@ struct NowPlayingView: View {
                 }
             }
             Spacer()
+            Button { haptic(); player.cycleLoop() } label: {
+                Text(player.loopA != nil && player.loopB == nil ? "A–" : "A-B")
+                    .font(.footnote.weight(.heavy))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 3)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(lineWidth: 1.5))
+                    .foregroundStyle(player.loopA != nil ? Color.accentColor : Color.white)
+            }
+            Spacer()
+            Button { showSound = true } label: {
+                Image(systemName: "slider.vertical.3").font(.title3)
+                    .foregroundStyle(eq.enabled ? Color.accentColor : Color.white)
+            }
+            Spacer()
             Button { showQueue = true } label: { Image(systemName: "list.bullet").font(.title3) }
         }
-        .padding(.horizontal, 32)
+        .padding(.horizontal, 22)
     }
+
+    private func haptic() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
 
     private func speedText(_ r: Double) -> String {
         r == r.rounded() ? "\(Int(r))×" : String(format: "%g×", r)
@@ -222,38 +280,101 @@ struct NowPlayingView: View {
 
 // MARK: - Scrubber
 
+/// Drag anywhere on the bar to move through the song. The position is read straight from the
+/// player several times a second, so the bar moves on its own while the song plays.
 struct ScrubberView: View {
-    @ObservedObject var clock: PlaybackClock
+    var compact = false
     @EnvironmentObject var player: PlayerEngine
-    @State private var dragging = false
-    @State private var value: Double = 0
+    @State private var dragFraction: Double?
 
     var body: some View {
-        let shown = dragging ? value : clock.time
-        VStack(spacing: 4) {
-            Slider(
-                value: Binding(get: { dragging ? value : min(clock.time, max(clock.duration, 1)) }, set: { value = $0 }),
-                in: 0...max(clock.duration, 1),
-                onEditingChanged: { editing in
-                    if editing {
-                        value = clock.time
-                        dragging = true
-                    } else {
-                        player.seek(to: value)
-                        dragging = false
+        TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+            let dur = player.duration
+            let shown = dragFraction.map { $0 * dur } ?? player.position
+            let frac = dur > 0 ? min(max(shown / dur, 0), 1) : 0
+            VStack(spacing: compact ? 0 : 2) {
+                bar(frac: frac, duration: dur)
+                if !compact {
+                    HStack {
+                        Text(formatTime(shown))
+                        Spacer()
+                        Text("-" + formatTime(max(dur - shown, 0)))
                     }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(dragFraction != nil ? Color.white : Color.white.opacity(0.6))
                 }
-            )
-            HStack {
-                Text(formatTime(shown))
-                Spacer()
-                Text("-" + formatTime(max(clock.duration - shown, 0)))
             }
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(Color.white.opacity(0.6))
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, compact ? 0 : 24)
     }
+
+    private func bar(frac: Double, duration dur: Double) -> some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let dragging = dragFraction != nil
+            let thickness: CGFloat = compact ? (dragging ? 6 : 3) : (dragging ? 12 : 6)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(compact ? Color.primary.opacity(0.15) : Color.white.opacity(0.22))
+                    .frame(width: w, height: thickness)
+                if let a = player.loopA, dur > 0 {
+                    let b = player.loopB ?? a
+                    Rectangle()
+                        .fill(Color.accentColor.opacity(0.5))
+                        .frame(width: max(w * (b - a) / dur, 2), height: thickness + 6)
+                        .offset(x: w * a / dur)
+                }
+                Capsule()
+                    .fill(compact ? Color.accentColor : Color.white)
+                    .frame(width: max(w * frac, thickness), height: thickness)
+                if !compact {
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: dragging ? 22 : 14, height: dragging ? 22 : 14)
+                        .shadow(color: .black.opacity(0.3), radius: 3)
+                        .offset(x: w * frac - (dragging ? 11 : 7))
+                }
+            }
+            .frame(width: w, height: geo.size.height)
+            .contentShape(Rectangle())
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        if dragFraction == nil { UISelectionFeedbackGenerator().selectionChanged() }
+                        dragFraction = min(max(g.location.x / max(w, 1), 0), 1)
+                    }
+                    .onEnded { g in
+                        let f = min(max(g.location.x / max(w, 1), 0), 1)
+                        if dur > 0 { player.seek(to: f * dur) }
+                        dragFraction = nil
+                    }
+            )
+            .animation(.easeOut(duration: 0.15), value: dragging)
+        }
+        .frame(height: compact ? 18 : 34)
+    }
+}
+
+// MARK: - Volume
+
+struct VolumeRow: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "speaker.fill").font(.caption).foregroundStyle(Color.white.opacity(0.6))
+            SystemVolumeSlider().frame(height: 34)
+            Image(systemName: "speaker.wave.3.fill").font(.caption).foregroundStyle(Color.white.opacity(0.6))
+        }
+    }
+}
+
+/// The phone's own volume slider; it also follows the hardware volume buttons.
+struct SystemVolumeSlider: UIViewRepresentable {
+    func makeUIView(context: Context) -> MPVolumeView {
+        let v = MPVolumeView(frame: .zero)
+        v.tintColor = .white
+        return v
+    }
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {}
 }
 
 // MARK: - Lyrics
@@ -406,6 +527,7 @@ struct VideoSurface: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        context.coordinator.player = player
         if !context.coordinator.detached, vc.player !== player { vc.player = player }
     }
 
@@ -415,7 +537,7 @@ struct VideoSurface: UIViewControllerRepresentable {
     /// so the sound keeps playing.
     @MainActor
     final class Coordinator: NSObject, AVPlayerViewControllerDelegate {
-        let player: AVPlayer
+        var player: AVPlayer
         weak var vc: AVPlayerViewController?
         var pipActive = false
         var detached = false

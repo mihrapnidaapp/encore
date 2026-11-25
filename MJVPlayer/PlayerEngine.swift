@@ -5,7 +5,7 @@ import UIKit
 
 enum RepeatMode: Int { case off, all, one }
 
-/// Time updates live in their own object so that lists don't redraw twice a second.
+/// Time updates live in their own object so that lists don't redraw several times a second.
 @MainActor
 final class PlaybackClock: ObservableObject {
     @Published var time: Double = 0
@@ -16,7 +16,9 @@ final class PlaybackClock: ObservableObject {
 final class PlayerEngine: ObservableObject {
     static let shared = PlayerEngine(library: .shared)
 
-    let player = AVPlayer()
+    /// The player that is currently audible. Two players take turns so songs can crossfade.
+    @Published private(set) var player = AVPlayer()
+    private var standby = AVPlayer()
     let clock = PlaybackClock()
     let library: LibraryStore
 
@@ -29,28 +31,36 @@ final class PlayerEngine: ObservableObject {
     @Published private(set) var contextTitle = ""
     @Published private(set) var sleepEnd: Date?
     @Published private(set) var sleepAfterTrack = false
+    @Published private(set) var loopA: Double?
+    @Published private(set) var loopB: Double?
 
     private var originalQueue: [UUID] = []
     private var currentID: UUID?
     private var countedCurrent = false
     private var observers: [NSObjectProtocol] = []
-    private var timeObserver: Any?
+    private var ticker: Timer?
     private var statusObservation: NSKeyValueObservation?
     private var sleepTask: Task<Void, Never>?
+    private var fadeTask: Task<Void, Never>?
+    private var fadingOut: AVPlayer?
     private var lastPersist = Date.distantPast
+    private var lastRestart = Date.distantPast
+    /// While a seek is running, the position shown is the target, not the old time.
+    private var seekTarget: Double?
+    private var seekGeneration = 0
 
     init(library: LibraryStore) {
         self.library = library
-        player.automaticallyWaitsToMinimizeStalling = false
+        for p in [player, standby] { configure(p) }
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
 
-        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] t in
-            let seconds = t.seconds
-            Task { @MainActor in self?.tick(seconds) }
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
         }
-        statusObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
-            Task { @MainActor in self?.syncPlaying() }
-        }
+        RunLoop.main.add(timer, forMode: .common)
+        ticker = timer
+
+        observeStatus()
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] note in
             let item = note.object as? AVPlayerItem
@@ -63,8 +73,25 @@ final class PlayerEngine: ObservableObject {
             let opts = AVAudioSession.InterruptionOptions(rawValue: (info[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0)
             if opts.contains(.shouldResume) { Task { @MainActor in self?.play() } }
         })
+        observers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+            // Headphones unplugged: pause like every other player does.
+            guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                  AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable else { return }
+            Task { @MainActor in self?.pause() }
+        })
         setupRemoteCommands()
         restoreState()
+    }
+
+    private func configure(_ p: AVPlayer) {
+        p.automaticallyWaitsToMinimizeStalling = false
+        p.actionAtItemEnd = .pause
+    }
+
+    private func observeStatus() {
+        statusObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in self?.syncPlaying() }
+        }
     }
 
     // MARK: State
@@ -79,11 +106,29 @@ final class PlayerEngine: ObservableObject {
         return queue[(index + 1)...].compactMap { library.track($0) }
     }
 
-    private func tick(_ seconds: Double) {
-        if seconds.isFinite { clock.time = seconds }
-        if let d = player.currentItem?.duration, d.isNumeric, d.seconds > 0, abs(clock.duration - d.seconds) > 0.5 {
-            clock.duration = d.seconds
+    /// Position read straight from the player (or the pending seek target).
+    var position: Double {
+        if let seekTarget { return seekTarget }
+        let s = player.currentTime().seconds
+        return s.isFinite ? max(s, 0) : 0
+    }
+
+    var duration: Double {
+        if let d = player.currentItem?.duration, d.isNumeric, d.seconds > 0 { return d.seconds }
+        return currentTrack?.duration ?? 0
+    }
+
+    private func tick() {
+        let t = position
+        clock.time = t
+        let d = duration
+        if abs(clock.duration - d) > 0.25 { clock.duration = d }
+
+        if let a = loopA, let b = loopB, b > a, t >= b, seekTarget == nil {
+            seek(to: a)
+            return
         }
+        checkCrossfade(time: t, duration: d)
         if isPlaying, Date().timeIntervalSince(lastPersist) > 5 { persistState() }
     }
 
@@ -137,8 +182,18 @@ final class PlayerEngine: ObservableObject {
         persistState()
     }
 
+    private func makeItem(_ url: URL) -> AVPlayerItem {
+        let asset = AVURLAsset(url: url)
+        let item = AVPlayerItem(asset: asset)
+        item.audioTimePitchAlgorithm = .timeDomain
+        Equalizer.attach(to: item, asset: asset)
+        return item
+    }
+
     private func load(index i: Int, autoplay: Bool, startAt: Double? = nil) {
+        finishFade()
         saveResumePosition()
+        clearLoop()
         guard queue.indices.contains(i), let t = library.track(queue[i]) else {
             stop()
             return
@@ -152,11 +207,11 @@ final class PlayerEngine: ObservableObject {
             updateNowPlaying(full: true)
             return
         }
-        let item = AVPlayerItem(url: url)
-        item.audioTimePitchAlgorithm = .timeDomain
-        player.replaceCurrentItem(with: item)
+        player.replaceCurrentItem(with: makeItem(url))
+        player.volume = 1
         currentID = t.id
         countedCurrent = false
+        seekTarget = nil
         clock.time = 0
         clock.duration = t.duration
 
@@ -165,10 +220,7 @@ final class PlayerEngine: ObservableObject {
            (t.kind == .video || t.duration > 600), r > 5, r < t.duration - 10 {
             start = r
         }
-        if let s = start, s > 0 {
-            player.seek(to: CMTime(seconds: s, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
-            clock.time = s
-        }
+        if let s = start, s > 0 { seek(to: s) }
         if autoplay { play() }
         updateNowPlaying(full: true)
         persistState()
@@ -182,7 +234,8 @@ final class PlayerEngine: ObservableObject {
             return
         }
         try? AVAudioSession.sharedInstance().setActive(true)
-        if clock.duration > 0, clock.time >= clock.duration - 0.5 { player.seek(to: .zero) }
+        let d = duration
+        if d > 0, position >= d - 0.5 { seek(to: 0) }
         player.playImmediately(atRate: rate)
         if let id = currentID, !countedCurrent {
             countedCurrent = true
@@ -191,6 +244,7 @@ final class PlayerEngine: ObservableObject {
     }
 
     func pause() {
+        finishFade()
         player.pause()
         saveResumePosition()
         persistState()
@@ -213,30 +267,58 @@ final class PlayerEngine: ObservableObject {
         }
     }
 
+    /// First press goes back to the start of the song. Pressing again right away
+    /// (or within the first seconds of the song) goes to the previous song.
     func previous() {
         guard !queue.isEmpty else { return }
-        if clock.time > 3 || (index == 0 && repeatMode != .all) {
+        finishFade()
+        let now = Date()
+        let pressedAgain = now.timeIntervalSince(lastRestart) < 4
+        if position > 2, !pressedAgain {
             seek(to: 0)
+            lastRestart = now
+            return
+        }
+        lastRestart = .distantPast
+        if index > 0 {
+            load(index: index - 1, autoplay: true)
+        } else if repeatMode == .all {
+            load(index: queue.count - 1, autoplay: true)
         } else {
-            load(index: index > 0 ? index - 1 : queue.count - 1, autoplay: true)
+            seek(to: 0)
+            lastRestart = now
         }
     }
 
     func seek(to seconds: Double) {
-        let s = max(0, seconds)
-        player.seek(to: CMTime(seconds: s, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        guard player.currentItem != nil else { return }
+        let d = duration
+        let s = d > 0 ? min(max(0, seconds), max(d - 0.25, 0)) : max(0, seconds)
+        seekGeneration += 1
+        let generation = seekGeneration
+        seekTarget = s
         clock.time = s
+        player.seek(to: CMTime(seconds: s, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor in self?.seekFinished(generation) }
+        }
+        updateNowPlaying()
+    }
+
+    private func seekFinished(_ generation: Int) {
+        guard generation == seekGeneration else { return }
+        seekTarget = nil
+        clock.time = position
         updateNowPlaying()
     }
 
     func skip(by seconds: Double) {
-        let limit = clock.duration > 0 ? clock.duration - 1 : clock.time + seconds
-        seek(to: min(max(clock.time + seconds, 0), limit))
+        seek(to: position + seconds)
     }
 
     func setRate(_ r: Float) {
         rate = r
         player.defaultRate = r
+        standby.defaultRate = r
         if isPlaying { player.rate = r }
         updateNowPlaying()
         persistState()
@@ -293,16 +375,116 @@ final class PlayerEngine: ObservableObject {
     }
 
     func stop() {
+        finishFade()
         saveResumePosition()
         player.replaceCurrentItem(with: nil)
         queue = []
         originalQueue = []
         index = 0
         currentID = nil
+        clearLoop()
         clock.time = 0
         clock.duration = 0
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         persistState()
+    }
+
+    // MARK: A-B loop
+
+    /// First call marks A, second marks B (the section then repeats), third clears it.
+    func cycleLoop() {
+        if loopA == nil {
+            loopA = position
+            AppState.shared.showToast("Loop start (A) set at \(formatTime(position))")
+        } else if loopB == nil {
+            let b = position
+            guard let a = loopA, b > a + 0.5 else {
+                AppState.shared.showToast("B must be after A")
+                return
+            }
+            loopB = b
+            AppState.shared.showToast("Looping \(formatTime(a)) – \(formatTime(b))")
+            seek(to: a)
+        } else {
+            clearLoop()
+            AppState.shared.showToast("Loop off")
+        }
+    }
+
+    func clearLoop() {
+        loopA = nil
+        loopB = nil
+    }
+
+    // MARK: Crossfade
+
+    private var crossfadeSeconds: Double { UserDefaults.standard.double(forKey: Prefs.crossfade) }
+
+    private func checkCrossfade(time: Double, duration d: Double) {
+        let fade = crossfadeSeconds
+        guard fade > 0, isPlaying, fadeTask == nil, seekTarget == nil, loopB == nil,
+              repeatMode != .one, !sleepAfterTrack, d > fade * 2 + 4,
+              let cur = currentTrack, cur.kind == .audio else { return }
+        let remaining = (d - time) / Double(max(rate, 0.1))
+        guard remaining <= fade, remaining > 0.3 else { return }
+        let nextIndex: Int
+        if index + 1 < queue.count { nextIndex = index + 1 }
+        else if repeatMode == .all { nextIndex = 0 }
+        else { return }
+        guard let nt = library.track(queue[nextIndex]), nt.kind == .audio else { return }
+        let url = library.fileURL(nt)
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        startCrossfade(to: nextIndex, track: nt, url: url, over: remaining)
+    }
+
+    private func startCrossfade(to nextIndex: Int, track nt: Track, url: URL, over seconds: Double) {
+        if let id = currentID { library.setResume(id, nil) }
+        let outgoing = player
+        let incoming = standby
+        incoming.replaceCurrentItem(with: makeItem(url))
+        incoming.volume = 0
+        incoming.defaultRate = rate
+        incoming.playImmediately(atRate: rate)
+
+        standby = outgoing
+        player = incoming
+        fadingOut = outgoing
+        observeStatus()
+
+        index = nextIndex
+        currentID = nt.id
+        countedCurrent = true
+        library.markPlayed(nt.id)
+        clock.time = 0
+        clock.duration = nt.duration
+        updateNowPlaying(full: true)
+        persistState()
+
+        let steps = max(Int(seconds * 20), 1)
+        fadeTask = Task { [weak self] in
+            for step in 1...steps {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                if Task.isCancelled { return }
+                let p = Float(step) / Float(steps)
+                // Equal-power curve keeps the loudness steady through the fade.
+                incoming.volume = sin(p * .pi / 2)
+                outgoing.volume = cos(p * .pi / 2)
+            }
+            self?.finishFade()
+        }
+    }
+
+    /// Ends a running crossfade at once: the new song at full volume, the old one stopped.
+    private func finishFade() {
+        fadeTask?.cancel()
+        fadeTask = nil
+        if let old = fadingOut {
+            old.pause()
+            old.replaceCurrentItem(with: nil)
+            old.volume = 1
+            fadingOut = nil
+            player.volume = 1
+        }
     }
 
     // MARK: Queue editing
@@ -365,6 +547,7 @@ final class PlayerEngine: ObservableObject {
     }
 
     private func fadeOutAndPause() async {
+        finishFade()
         for step in stride(from: 10, through: 0, by: -1) {
             player.volume = Float(step) / 10
             try? await Task.sleep(nanoseconds: 400_000_000)
@@ -379,18 +562,16 @@ final class PlayerEngine: ObservableObject {
 
     private func saveResumePosition() {
         guard let id = currentID, let t = library.track(id), t.kind == .video || t.duration > 600 else { return }
-        let pos = player.currentTime().seconds
-        guard pos.isFinite else { return }
+        let pos = position
         library.setResume(id, (pos > 5 && pos < t.duration - 10) ? pos : nil)
     }
 
     func persistState() {
         lastPersist = Date()
         let d = UserDefaults.standard
-        let pos = player.currentTime().seconds
         d.set(queue.map(\.uuidString), forKey: "pe.queue")
         d.set(index, forKey: "pe.index")
-        d.set(pos.isFinite ? pos : 0, forKey: "pe.time")
+        d.set(position, forKey: "pe.time")
         d.set(shuffle, forKey: "pe.shuffle")
         d.set(repeatMode.rawValue, forKey: "pe.repeat")
         d.set(rate, forKey: "pe.rate")
@@ -403,6 +584,7 @@ final class PlayerEngine: ObservableObject {
         let r = d.float(forKey: "pe.rate")
         rate = r > 0 ? r : 1
         player.defaultRate = rate
+        standby.defaultRate = rate
         shuffle = d.bool(forKey: "pe.shuffle")
         contextTitle = d.string(forKey: "pe.context") ?? ""
         let ids = (d.stringArray(forKey: "pe.queue") ?? []).compactMap { UUID(uuidString: $0) }.filter { library.track($0) != nil }
@@ -413,7 +595,7 @@ final class PlayerEngine: ObservableObject {
         load(index: i, autoplay: false, startAt: d.double(forKey: "pe.time"))
     }
 
-    // MARK: Lock screen / Control Center
+    // MARK: Lock screen / Control Center / CarPlay Now Playing
 
     private func setupRemoteCommands() {
         let c = MPRemoteCommandCenter.shared()
@@ -443,6 +625,32 @@ final class PlayerEngine: ObservableObject {
             Task { @MainActor in self?.seek(to: t) }
             return .success
         }
+        c.skipForwardCommand.preferredIntervals = [15]
+        c.skipBackwardCommand.preferredIntervals = [15]
+        c.skipForwardCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.skip(by: 15) }
+            return .success
+        }
+        c.skipBackwardCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.skip(by: -15) }
+            return .success
+        }
+        c.changeRepeatModeCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.cycleRepeat() }
+            return .success
+        }
+        c.changeShuffleModeCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.toggleShuffle() }
+            return .success
+        }
+        c.likeCommand.addTarget { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let id = self.currentID else { return }
+                self.library.toggleFavorite(id)
+                self.updateNowPlaying(full: true)
+            }
+            return .success
+        }
     }
 
     /// Call after the current track's title or cover changes.
@@ -465,10 +673,15 @@ final class PlayerEngine: ObservableObject {
             if let url = library.artworkURL(t), let img = UIImage(contentsOfFile: url.path) {
                 info[MPMediaItemPropertyArtwork] = Self.artwork(img)
             }
+            // Long videos and podcasts get ±15 s buttons on the lock screen; songs keep previous/next.
+            let long = t.kind == .video || t.duration > 1200
+            let c = MPRemoteCommandCenter.shared()
+            c.skipForwardCommand.isEnabled = long
+            c.skipBackwardCommand.isEnabled = long
+            c.likeCommand.isActive = t.favorite
         }
-        let elapsed = player.currentTime().seconds
-        info[MPMediaItemPropertyPlaybackDuration] = clock.duration > 0 ? clock.duration : t.duration
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = elapsed.isFinite ? elapsed : 0
+        info[MPMediaItemPropertyPlaybackDuration] = duration
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = position
         info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? Double(rate) : 0.0
         info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = Double(rate)
         info[MPNowPlayingInfoPropertyPlaybackQueueIndex] = index

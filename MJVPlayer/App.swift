@@ -9,7 +9,10 @@ struct MJVPlayerApp: App {
     @StateObject private var app = AppState.shared
     @Environment(\.scenePhase) private var scenePhase
 
-    init() { Prefs.register() }
+    init() {
+        Prefs.register()
+        _ = EqualizerStore.shared
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -193,7 +196,9 @@ struct MiniPlayerView: View {
     var body: some View {
         if let t = player.currentTrack {
             VStack(spacing: 0) {
-                MiniProgressBar(clock: player.clock)
+                ScrubberView(compact: true)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, -8)
                 HStack(spacing: 12) {
                     ArtworkView(track: t, size: 44, corner: 6)
                     VStack(alignment: .leading, spacing: 1) {
@@ -201,6 +206,11 @@ struct MiniPlayerView: View {
                         Text(t.displayArtist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer(minLength: 4)
+                    Button { player.previous() } label: {
+                        Image(systemName: "backward.fill")
+                            .font(.title3)
+                            .frame(width: 40, height: 44)
+                    }
                     Button { player.togglePlay() } label: {
                         Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                             .font(.title2)
@@ -225,17 +235,5 @@ struct MiniPlayerView: View {
                 else if v.translation.width > 60 { player.previous() }
             })
         }
-    }
-}
-
-struct MiniProgressBar: View {
-    @ObservedObject var clock: PlaybackClock
-    var body: some View {
-        GeometryReader { geo in
-            Rectangle()
-                .fill(Color.accentColor)
-                .frame(width: clock.duration > 0 ? geo.size.width * min(clock.time / clock.duration, 1) : 0)
-        }
-        .frame(height: 2)
     }
 }

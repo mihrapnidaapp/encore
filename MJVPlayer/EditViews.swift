@@ -278,6 +278,9 @@ struct SettingsView: View {
     @AppStorage(Prefs.resumeLong) private var resumeLong = true
     @State private var storage = "…"
     @State private var fetchingCovers = false
+    @State private var showSound = false
+    @ObservedObject private var eq = EqualizerStore.shared
+    @AppStorage(Prefs.crossfade) private var crossfade = 0.0
 
     var body: some View {
         Form {
@@ -307,6 +310,19 @@ struct SettingsView: View {
             }
 
             Section {
+                Button { showSound = true } label: {
+                    LabeledContent("Equalizer", value: eq.enabled ? eq.presetName : "Off")
+                }
+                Button { showSound = true } label: {
+                    LabeledContent("Crossfade", value: crossfade == 0 ? "Off" : "\(Int(crossfade)) s")
+                }
+            } header: {
+                Text("Sound")
+            } footer: {
+                Text("Lock screen, Control Center, AirPods and the car's Now Playing screen (CarPlay or Bluetooth) show the cover and control playback.")
+            }
+
+            Section {
                 Toggle("Clean up video titles", isOn: $cleanTitles)
                 Picker("Preferred video quality", selection: $videoHeight) {
                     ForEach([360, 480, 720, 1080], id: \.self) { Text("\($0)p").tag($0) }
@@ -332,6 +348,7 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .sheet(isPresented: $showSound) { EqualizerView().withAppEnvironment() }
         .onAppear {
             storage = ByteCountFormatter.string(fromByteCount: library.storageUsed(), countStyle: .file)
         }
